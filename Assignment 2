@@ -1,0 +1,195 @@
+Definition used:
+    ways(0) = 0
+    ways(1) = 1
+    ways(n) = ways(n-1) + ways(n-2), for n >= 2
+ 
+Run:
+    python day4_q7_redesign.py
+ 
+Only Python standard-library modules are used.
+"""
+ 
+import sys
+import time
+ 
+ 
+# ------------------------------------------------------------
+# ORIGINAL DESIGN: plain recursive solution
+# ------------------------------------------------------------
+ 
+plain_calls = 0
+ 
+ 
+def ways_plain(n):
+    """Naive recursion: recomputes the same subproblems repeatedly."""
+    global plain_calls
+    plain_calls += 1
+ 
+    if n < 0:
+        raise ValueError("n must be non-negative")
+    if n <= 1:
+        return n
+ 
+    return ways_plain(n - 1) + ways_plain(n - 2)
+ 
+ 
+# ------------------------------------------------------------
+# REDESIGN 1: recursion with memoisation
+# ------------------------------------------------------------
+ 
+memo_calls = 0
+ 
+ 
+def ways_memo(n, cache=None):
+    """Recursive solution that stores already-computed answers."""
+    global memo_calls
+ 
+    if n < 0:
+        raise ValueError("n must be non-negative")
+ 
+    if cache is None:
+        cache = {0: 0, 1: 1}
+ 
+    memo_calls += 1
+ 
+    if n in cache:
+        return cache[n]
+ 
+    cache[n] = ways_memo(n - 1, cache) + ways_memo(n - 2, cache)
+    return cache[n]
+ 
+ 
+# ------------------------------------------------------------
+# REDESIGN 2: iterative solution using only the last two values
+# ------------------------------------------------------------
+ 
+loop_steps = 0
+ 
+ 
+def ways_loop(n):
+    """Bottom-up dynamic programming with O(1) auxiliary space."""
+    global loop_steps
+ 
+    if n < 0:
+        raise ValueError("n must be non-negative")
+ 
+    if n <= 1:
+        return n
+ 
+    previous, current = 0, 1
+ 
+    for _ in range(2, n + 1):
+        next_value = previous + current
+        previous = current
+        current = next_value
+        loop_steps += 1
+ 
+    return current
+ 
+ 
+def timed_call(function, n):
+    """Return result and elapsed seconds."""
+    start = time.perf_counter()
+    result = function(n)
+    elapsed = time.perf_counter() - start
+    return result, elapsed
+ 
+ 
+def compare_small_input(n=20):
+    """
+    Compare all three algorithms on a small input.
+    Naive recursion is intentionally limited to small n because its
+    number of calls grows exponentially.
+    """
+    global plain_calls, memo_calls, loop_steps
+ 
+    plain_calls = 0
+    plain_result, plain_time = timed_call(ways_plain, n)
+    plain_count = plain_calls
+ 
+    memo_calls = 0
+    memo_result, memo_time = timed_call(ways_memo, n)
+    memo_count = memo_calls
+ 
+    loop_steps = 0
+    loop_result, loop_time = timed_call(ways_loop, n)
+    loop_count = loop_steps
+ 
+    print(f"\\nCOMPARISON FOR n = {n}")
+    print("-" * 65)
+    print(f"Plain recursion : result={plain_result}, calls={plain_count}, "
+          f"time={plain_time:.6f} s")
+    print(f"Memoisation     : result={memo_result}, calls={memo_count}, "
+          f"time={memo_time:.6f} s")
+    print(f"Iterative loop  : result={loop_result}, steps={loop_count}, "
+          f"time={loop_time:.6f} s")
+ 
+    assert plain_result == memo_result == loop_result
+    print("Validation: all three methods give the same result.")
+ 
+ 
+def test_n_1000():
+    """
+    Test all three designs at n=1000 without allowing the original
+    exponential algorithm to run for an impractical amount of time.
+    Python's default recursion limit is usually around 1000.
+    """
+    print("\\nTEST FOR n = 1000")
+    print("-" * 65)
+    print("Python recursion limit:", sys.getrecursionlimit())
+ 
+    # Naive recursion is not practical at n=1000. Its exponential
+    # call count makes it unsuitable even before stack depth is reached.
+    print("Plain recursion: NOT RUN to completion at n=1000.")
+    print("Reason: exponential repeated work; recursion depth also risks "
+          "RecursionError.")
+ 
+    # Memoisation removes repeated work but still uses recursive stack frames.
+    global memo_calls
+    memo_calls = 0
+    start = time.perf_counter()
+    try:
+        memo_result = ways_memo(1000)
+        memo_time = time.perf_counter() - start
+        print(f"Memoised recursion: result computed, calls={memo_calls}, "
+              f"time={memo_time:.6f} s")
+    except RecursionError as exc:
+        memo_time = time.perf_counter() - start
+        print("Memoised recursion: RecursionError at n=1000.")
+        print("Explanation: memoisation reduces repeated calculations, "
+              "but recursion still creates a call stack about n levels deep.")
+        print("Error:", exc)
+ 
+    # Iterative solution has no recursive call stack.
+    global loop_steps
+    loop_steps = 0
+    loop_result, loop_time = timed_call(ways_loop, 1000)
+    print(f"Iterative loop: result has {len(str(loop_result))} digits, "
+          f"steps={loop_steps}, time={loop_time:.6f} s")
+ 
+    # Verify the loop result with memoisation at a safer recursion depth.
+    safe_n = min(900, sys.getrecursionlimit() - 100)
+    if safe_n >= 2:
+        check = ways_memo(safe_n)
+        loop_check = ways_loop(safe_n)
+        print(f"Cross-check at n={safe_n}:",
+              "PASSED" if check == loop_check else "FAILED")
+ 
+ 
+def main():
+    print("DAY-4 Q7 - DIAGNOSE, REDESIGN AND VALIDATE")
+    print("Recurrence: ways(0)=0, ways(1)=1, ways(n)=ways(n-1)+ways(n-2)")
+    compare_small_input(20)
+    test_n_1000()
+ 
+    print("\\nFINAL DESIGN DECISION")
+    print("Deploy the iterative loop for large n: O(n) time and O(1) "
+          "auxiliary space.")
+    print("Memoisation is useful when recursive structure is important, "
+          "but it needs O(n) cache space and O(n) call-stack space.")
+    print("Avoid plain recursion for large n because its time is O(2^n) "
+          "approximately and its repeated work is substantial.")
+ 
+ 
+if __name__ == "__main__":
+    main()
