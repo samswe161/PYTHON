@@ -1,0 +1,252 @@
+ 
+Run:
+    python contact_merger.py
+ 
+Uses only Python standard-library modules.
+"""
+ 
+import re
+import time
+from collections import defaultdict
+ 
+ 
+def normalize_phone(phone):
+    """
+    Keep digits only. For this assignment, remove India's country code 91
+    when the number has 12 digits and begins with 91.
+    """
+    if not phone:
+        return ""
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+ 
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+ 
+    # Accept a 10-digit Indian mobile number for this demonstration.
+    if len(digits) != 10:
+        return ""
+    return digits
+ 
+ 
+def normalize_name(name):
+    """Normalise spacing and case while preserving a readable name."""
+    if not name:
+        return ""
+    cleaned = " ".join(str(name).strip().split())
+    return cleaned.casefold()
+ 
+ 
+def normalize_email(email):
+    """Trim and lowercase an e-mail address; return empty if missing."""
+    if not email:
+        return ""
+    value = str(email).strip().lower()
+    if not value or value.count("@") != 1 or " " in value:
+        return ""
+    local, domain = value.split("@")
+    if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+        return ""
+    return value
+ 
+ 
+def merge_contacts(contact_lists):
+    """
+    Merge contacts using normalised phone numbers as dictionary keys.
+    Each merged contact stores sets of all observed names, phone numbers
+    and e-mail addresses.
+    """
+    merged = {}
+ 
+    for source_name, contacts in contact_lists.items():
+        for contact in contacts:
+            raw_name = str(contact.get("name", "")).strip()
+            raw_phones = contact.get("phones", [])
+            raw_emails = contact.get("emails", [])
+ 
+            if isinstance(raw_phones, str):
+                raw_phones = [raw_phones]
+            if isinstance(raw_emails, str):
+                raw_emails = [raw_emails]
+ 
+            valid_numbers = []
+            for phone in raw_phones:
+                number = normalize_phone(phone)
+                if number:
+                    valid_numbers.append((number, str(phone).strip()))
+ 
+            valid_emails = {
+                email for email in
+                (normalize_email(value) for value in raw_emails)
+                if email
+            }
+ 
+            # Contacts without a usable phone number cannot safely be
+            # matched by this phone-keyed design. Keep them separately.
+            if not valid_numbers:
+                unique_key = f"NO_PHONE::{source_name}::{len(merged)}"
+                merged[unique_key] = {
+                    "names": {raw_name} if raw_name else set(),
+                    "phones": set(),
+                    "emails": valid_emails,
+                    "sources": {source_name},
+                }
+                continue
+ 
+            # If one contact has multiple phone numbers, attach all numbers
+            # to the same contact record. Merge records already found by
+            # any of those numbers into one canonical record.
+            existing_keys = [
+                number for number, _ in valid_numbers if number in merged
+            ]
+ 
+            if existing_keys:
+                canonical_key = existing_keys[0]
+                target = merged[canonical_key]
+ 
+                # Combine any other previously-created records that share
+                # another number in this same input contact.
+                for other_key in existing_keys[1:]:
+                    if other_key == canonical_key or other_key not in merged:
+                        continue
+                    other = merged.pop(other_key)
+                    target["names"].update(other["names"])
+                    target["phones"].update(other["phones"])
+                    target["emails"].update(other["emails"])
+                    target["sources"].update(other["sources"])
+            else:
+                canonical_key = valid_numbers[0][0]
+                merged[canonical_key] = {
+                    "names": set(),
+                    "phones": set(),
+                    "emails": set(),
+                    "sources": set(),
+                }
+                target = merged[canonical_key]
+ 
+            if raw_name:
+                target["names"].add(raw_name)
+            target["phones"].update(original for _, original in valid_numbers)
+            target["phones"].update(number for number, _ in valid_numbers)
+            target["emails"].update(valid_emails)
+            target["sources"].add(source_name)
+ 
+            # Map every normalised number to the same merged record. This
+            # also supports later contacts that use a secondary number.
+            for number, _ in valid_numbers:
+                if number not in merged:
+                    merged[number] = target
+ 
+    # Remove duplicate dictionary aliases; return each underlying record once.
+    unique_records = []
+    seen_objects = set()
+    for record in merged.values():
+        identity = id(record)
+        if identity not in seen_objects:
+            seen_objects.add(identity)
+            unique_records.append(record)
+ 
+    # Produce stable, readable output.
+    result = []
+    for record in unique_records:
+        names = sorted(record["names"], key=lambda value: (value.casefold(), value))
+        result.append({
+            "name": names[0] if names else "Unknown",
+            "all_names": sorted(record["names"]),
+            "phone_numbers": sorted(record["phones"]),
+            "emails": sorted(record["emails"]),
+            "sources": sorted(record["sources"]),
+        })
+    return result
+ 
+ 
+def make_test_data():
+    """Create sample data with duplicates, missing fields and varied formats."""
+    return {
+        "Phone 1": [
+            {"name": "Dr. Ravi", "phones": ["+91 98400 12345"],
+             "emails": ["RAVI@example.com"]},
+            {"name": "Anita", "phones": ["98765-43210"],
+             "emails": ["anita@gmail.com"]},
+            {"name": "Kumar", "phones": ["9000011111"], "emails": []},
+            {"name": "No Number Contact", "phones": [], "emails": ["nonum@mail.com"]},
+        ],
+        "Phone 2": [
+            {"name": "ravi kumar", "phones": ["9840012345", "9888877777"],
+             "emails": ["ravi@example.com"]},
+            {"name": "ANITA", "phones": ["+91 98765 43210"],
+             "emails": ["ANITA@gmail.com"]},
+            {"name": "Kumar", "phones": ["90000 11111"],
+             "emails": ["kumar@gmail.com"]},
+            {"name": "", "phones": ["9123456789"], "emails": []},
+        ],
+        "SIM Card": [
+            {"name": "Ravi", "phones": ["98888 77777"],
+             "emails": ["ravi.work@example.com"]},
+            {"name": "Meena", "phones": ["94444 55555"],
+             "emails": ["meena@gmail.com"]},
+            {"name": "Damaged Entry", "phones": ["12345"], "emails": ["bad-email"]},
+        ],
+    }
+ 
+ 
+def print_contacts(contacts):
+    print("\\nMERGED CONTACT LIST")
+    print("=" * 70)
+    for index, contact in enumerate(contacts, start=1):
+        print(f"{index}. Name: {contact['name']}")
+        print("   Other name spellings:", contact["all_names"])
+        print("   Phone numbers:", contact["phone_numbers"])
+        print("   E-mails:", contact["emails"])
+        print("   Sources:", contact["sources"])
+ 
+ 
+def verify_small_example():
+    """Check a small example whose expected merged result is known."""
+    small = {
+        "Phone A": [
+            {"name": "Dr. Ravi", "phones": ["+91 98400 12345"],
+             "emails": ["ravi@example.com"]}
+        ],
+        "Phone B": [
+            {"name": "ravi kumar", "phones": ["9840012345"],
+             "emails": ["ravi.work@example.com"]}
+        ],
+    }
+    result = merge_contacts(small)
+    assert len(result) == 1, "Expected one merged Ravi contact"
+    assert len(result[0]["phone_numbers"]) >= 1
+    assert "ravi@example.com" in result[0]["emails"]
+    assert "ravi.work@example.com" in result[0]["emails"]
+    print("\\nManual verification test: PASSED (two Ravi entries merged).")
+ 
+ 
+def benchmark():
+    """Measure merge time for 1,000 and 100,000 generated contacts."""
+    print("\\nPERFORMANCE MEASUREMENT")
+    for count in (1000, 100000):
+        generated = []
+        for i in range(count):
+            generated.append({
+                "name": f"Person {i}",
+                "phones": [f"{9000000000 + (i % 100000000):010d}"],
+                "emails": [f"person{i}@example.com"],
+            })
+ 
+        datasets = {"Generated Phone": generated}
+        start = time.perf_counter()
+        merged = merge_contacts(datasets)
+        elapsed = time.perf_counter() - start
+        print(f"{count:,} input contacts -> {len(merged):,} merged records")
+        print(f"Elapsed time: {elapsed:.6f} seconds")
+ 
+ 
+def main():
+    contact_lists = make_test_data()
+    merged_contacts = merge_contacts(contact_lists)
+    print_contacts(merged_contacts)
+    verify_small_example()
+    benchmark()
+ 
+ 
+if __name__ == "__main__":
+    main()
