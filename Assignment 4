@@ -1,0 +1,302 @@
+ 
+Input line format:
+register_number;name;department;email;event1;event2;...
+ 
+Run:
+    python college_fest_registration.py
+    python college_fest_registration.py --input input_data --output output_data
+ 
+The default run creates demonstration input files, including examples of:
+- valid registrations
+- a duplicate register number
+- an invalid e-mail
+- a damaged line
+- one missing department file
+ 
+The program uses only Python standard-library modules.
+"""
+ 
+import argparse
+import csv
+import os
+from collections import Counter, defaultdict
+from pathlib import Path
+ 
+DEPARTMENT_FILES = {
+    "CSE": "CSE.txt",
+    "ECE": "ECE.txt",
+    "EEE": "EEE.txt",
+    "MECH": "MECH.txt",
+    "CIVIL": "CIVIL.txt",
+}
+ 
+MASTER_FIELDS = [
+    "register_number", "name", "department", "email", "events"
+]
+ 
+ 
+def valid_email(email):
+    """Simple e-mail validation using string methods."""
+    email = email.strip()
+    if not email or " " in email:
+        return False
+    if email.count("@") != 1:
+        return False
+ 
+    local, domain = email.split("@")
+    if not local or not domain:
+        return False
+    if domain.startswith(".") or domain.endswith("."):
+        return False
+    if "." not in domain:
+        return False
+    if domain.startswith("-") or domain.endswith("-"):
+        return False
+    return True
+ 
+ 
+def log_error(error_log, source_file, line_number, reason, raw_line=""):
+    """Write one error entry; logging failures are reported but not fatal."""
+    try:
+        with open(error_log, "a", encoding="utf-8") as file:
+            file.write(
+                f"{source_file} | line {line_number} | {reason} | "
+                f"{raw_line.strip()}\\n"
+            )
+    except OSError as exc:
+        print(f"Warning: could not write error log: {exc}")
+ 
+ 
+def parse_registration(raw_line):
+    """
+    Return a cleaned registration dictionary.
+    Raise ValueError when the line is damaged or invalid.
+    """
+    parts = [part.strip() for part in raw_line.strip().split(";")]
+ 
+    # At least 5 fields: register number, name, department, e-mail, event.
+    if len(parts) < 5:
+        raise ValueError("damaged line: fewer than five fields")
+ 
+    register_number, name, department, email = parts[:4]
+    events = [event.strip() for event in parts[4:] if event.strip()]
+ 
+    if not register_number or not name or not department:
+        raise ValueError("register number, name or department is empty")
+    if not events:
+        raise ValueError("no event selected")
+    if not valid_email(email):
+        raise ValueError("invalid e-mail address")
+ 
+    return {
+        "register_number": register_number,
+        "name": name,
+        "department": department.upper(),
+        "email": email.lower(),
+        "events": events,
+    }
+ 
+ 
+def write_csv(path, fieldnames, rows):
+    """Write rows to a CSV file, including its header."""
+    with open(path, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+ 
+ 
+def create_demo_files(input_dir):
+    """Create test inputs. CIVIL.txt is intentionally not created."""
+    input_dir.mkdir(parents=True, exist_ok=True)
+ 
+    demo_data = {
+        "CSE.txt": [
+            "1001;Arun Kumar;CSE;arun@gmail.com;Coding;Quiz",
+            "1002;Meena;CSE;meena@gmail.com;Dance;Singing",
+            "1003;Ravi;CSE;ravi.gmail.com;Coding",
+            "damaged line without enough fields",
+        ],
+        "ECE.txt": [
+            "1004;Priya;ECE;priya@gmail.com;Singing;Dance",
+            "1001;Arun Kumar;CSE;arun@gmail.com;Coding;Quiz",
+            "1005;Karthik;ECE;karthik@gmail.com;Photography",
+        ],
+        "EEE.txt": [
+            "1006;Divya;EEE;divya@gmail.com;Dance",
+            "1007;Sanjay;EEE;sanjay@gmail.com;Coding;Photography",
+        ],
+        "MECH.txt": [
+            "1008;Nila;MECH;nila@gmail.com;Singing",
+            "1009;Vijay;MECH;vijay@gmail.com;Quiz;Coding",
+        ],
+    }
+ 
+    for filename, lines in demo_data.items():
+        with open(input_dir / filename, "w", encoding="utf-8") as file:
+            file.write("\\n".join(lines) + "\\n")
+ 
+ 
+def process_registrations(input_dir, output_dir):
+    """Read all department files and create clean output files."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+ 
+    master = []
+    seen_register_numbers = set()
+    event_participants = defaultdict(list)
+    department_counts = Counter()
+    error_log = output_dir / "error_log.txt"
+    summary_file = output_dir / "summary_report.txt"
+ 
+    # Start a fresh error log for every run.
+    error_log.write_text("COLLEGE FEST REGISTRATION ERROR LOG\\n",
+                         encoding="utf-8")
+ 
+    total_lines = 0
+    accepted = 0
+    duplicate_count = 0
+    invalid_count = 0
+    damaged_count = 0
+    missing_count = 0
+ 
+    for expected_department, filename in DEPARTMENT_FILES.items():
+        file_path = input_dir / filename
+ 
+        # A missing department file must not stop the remaining files.
+        try:
+            source = open(file_path, "r", encoding="utf-8")
+        except FileNotFoundError:
+            missing_count += 1
+            log_error(error_log, filename, "-", "department file missing")
+            continue
+        except OSError as exc:
+            log_error(error_log, filename, "-", f"file read error: {exc}")
+            continue
+ 
+        with source:
+            for line_number, raw_line in enumerate(source, start=1):
+                if not raw_line.strip():
+                    continue
+ 
+                total_lines += 1
+                try:
+                    record = parse_registration(raw_line)
+ 
+                    if record["department"] != expected_department:
+                        raise ValueError(
+                            f"department mismatch: expected {expected_department}"
+                        )
+ 
+                    reg_no = record["register_number"]
+                    if reg_no in seen_register_numbers:
+                        duplicate_count += 1
+                        log_error(error_log, filename, line_number,
+                                  "duplicate register number", raw_line)
+                        continue
+ 
+                    # Add to the set only after the record passes validation.
+                    seen_register_numbers.add(reg_no)
+                    master.append({
+                        "register_number": reg_no,
+                        "name": record["name"],
+                        "department": record["department"],
+                        "email": record["email"],
+                        "events": ";".join(record["events"]),
+                    })
+                    accepted += 1
+                    department_counts[record["department"]] += 1
+ 
+                    for event in record["events"]:
+                        event_participants[event].append({
+                            "register_number": reg_no,
+                            "name": record["name"],
+                            "department": record["department"],
+                            "email": record["email"],
+                        })
+ 
+                except ValueError as exc:
+                    message = str(exc)
+                    if "invalid e-mail" in message:
+                        invalid_count += 1
+                    else:
+                        damaged_count += 1
+                    log_error(error_log, filename, line_number,
+                              message, raw_line)
+                except Exception as exc:
+                    # Unexpected bad records are logged; processing continues.
+                    damaged_count += 1
+                    log_error(error_log, filename, line_number,
+                              f"unexpected record error: {exc}", raw_line)
+ 
+    # Clean master list.
+    master_path = output_dir / "master_list.csv"
+    write_csv(master_path, MASTER_FIELDS, master)
+ 
+    # One separate CSV file for each event.
+    event_dir = output_dir / "event_lists"
+    event_dir.mkdir(parents=True, exist_ok=True)
+    for event, participants in sorted(event_participants.items()):
+        safe_name = "".join(
+            char if char.isalnum() or char in "-_" else "_"
+            for char in event
+        )
+        write_csv(
+            event_dir / f"{safe_name}_participants.csv",
+            ["register_number", "name", "department", "email"],
+            participants,
+        )
+ 
+    # Summary report.
+    with open(summary_file, "w", encoding="utf-8") as file:
+        file.write("COLLEGE CULTURAL FEST - SUMMARY REPORT\\n")
+        file.write("---------------------------------------\\n")
+        file.write(f"Input non-empty lines processed: {total_lines}\\n")
+        file.write(f"Accepted unique registrations: {accepted}\\n")
+        file.write(f"Duplicate registrations rejected: {duplicate_count}\\n")
+        file.write(f"Invalid e-mail records rejected: {invalid_count}\\n")
+        file.write(f"Damaged/other invalid records: {damaged_count}\\n")
+        file.write(f"Missing department files: {missing_count}\\n")
+        file.write("\\nAccepted registrations by department:\\n")
+        for department in DEPARTMENT_FILES:
+            file.write(
+                f"{department}: {department_counts.get(department, 0)}\\n"
+            )
+        file.write("\\nParticipants by event:\\n")
+        for event, participants in sorted(event_participants.items()):
+            file.write(f"{event}: {len(participants)}\\n")
+ 
+    print("\\nPROCESSING COMPLETED")
+    print(f"Accepted unique registrations: {accepted}")
+    print(f"Duplicates: {duplicate_count}")
+    print(f"Invalid e-mails: {invalid_count}")
+    print(f"Damaged/other invalid lines: {damaged_count}")
+    print(f"Missing department files: {missing_count}")
+    print(f"Master list: {master_path}")
+    print(f"Event lists folder: {event_dir}")
+    print(f"Summary report: {summary_file}")
+    print(f"Error log: {error_log}")
+ 
+ 
+def main():
+    parser = argparse.ArgumentParser(
+        description="Process college fest registration text files."
+    )
+    parser.add_argument("--input", default="input_data",
+                        help="folder containing department text files")
+    parser.add_argument("--output", default="output_data",
+                        help="folder for generated output files")
+    parser.add_argument("--demo", action="store_true",
+                        help="create demonstration inputs before processing")
+    args = parser.parse_args()
+ 
+    input_dir = Path(args.input)
+    output_dir = Path(args.output)
+ 
+    # The default first run creates sample data for easy demonstration.
+    if args.demo or not input_dir.exists():
+        create_demo_files(input_dir)
+ 
+    process_registrations(input_dir, output_dir)
+ 
+ 
+if __name__ == "__main__":
+    main()
