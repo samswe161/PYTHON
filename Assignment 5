@@ -1,0 +1,242 @@
+import re
+import sqlite3
+import time
+from collections import Counter
+ 
+POSITIVE = {"good", "clean", "fast", "helpful", "improved"}
+NEGATIVE = {"bad", "dirty", "slow", "rude", "smoke", "broken"}
+NEGATORS = {"not", "never", "no"}
+ 
+# 50 sample complaints from different stations.
+COMPLAINTS = [
+    ("Central", "2026-11-01", "Roads are clean and the bus was fast."),
+    ("Egmore", "2026-11-01", "Smoke from the factory, air is bad."),
+    ("Tambaram", "2026-11-01", "The staff were not helpful."),
+    ("Guindy", "2026-11-01", "Not bad, service improved."),
+    ("Velachery", "2026-11-02", "The waiting area is clean and staff are helpful."),
+    ("Avadi", "2026-11-02", "The bus was slow and the road was dirty."),
+    ("Central", "2026-11-02", "The service is good and the bus is fast."),
+    ("Egmore", "2026-11-02", "The staff were rude and the ticket machine is broken."),
+    ("Tambaram", "2026-11-03", "The platform is not clean."),
+    ("Guindy", "2026-11-03", "The new service has improved."),
+    ("Velachery", "2026-11-03", "No helpful staff were available."),
+    ("Avadi", "2026-11-03", "The bus arrived fast and the station is clean."),
+    ("Central", "2026-11-04", "The road is dirty and the bus is slow."),
+    ("Egmore", "2026-11-04", "The staff are helpful and polite."),
+    ("Tambaram", "2026-11-04", "Smoke makes the air bad near the station."),
+    ("Guindy", "2026-11-04", "The service is not bad today."),
+    ("Velachery", "2026-11-05", "The ticket counter staff were rude."),
+    ("Avadi", "2026-11-05", "The bus was fast and the route was good."),
+    ("Central", "2026-11-05", "The waiting room is not clean."),
+    ("Egmore", "2026-11-05", "The broken display is a problem."),
+    ("Tambaram", "2026-11-06", "Staff were helpful and the station was clean."),
+    ("Guindy", "2026-11-06", "The bus service was slow."),
+    ("Velachery", "2026-11-06", "The service has never improved."),
+    ("Avadi", "2026-11-06", "The road is good and travel is fast."),
+    ("Central", "2026-11-07", "The staff were not rude and helped us."),
+    ("Egmore", "2026-11-07", "There is smoke and the air quality is bad."),
+    ("Tambaram", "2026-11-07", "The platform is clean."),
+    ("Guindy", "2026-11-07", "The bus is not fast during peak hours."),
+    ("Velachery", "2026-11-08", "The service improved and staff were helpful."),
+    ("Avadi", "2026-11-08", "The ticket machine is broken."),
+    ("Central", "2026-11-08", "The bus was good and fast."),
+    ("Egmore", "2026-11-08", "The station is dirty and staff are rude."),
+    ("Tambaram", "2026-11-09", "The staff were never helpful."),
+    ("Guindy", "2026-11-09", "The waiting area is clean."),
+    ("Velachery", "2026-11-09", "The bus was slow, but the staff were helpful."),
+    ("Avadi", "2026-11-09", "The road is not dirty."),
+    ("Central", "2026-11-10", "The service is bad and the bus is slow."),
+    ("Egmore", "2026-11-10", "The new route is fast and good."),
+    ("Tambaram", "2026-11-10", "Smoke is coming from the factory."),
+    ("Guindy", "2026-11-10", "The staff are not helpful and the machine is broken."),
+    ("Velachery", "2026-11-11", "The station is clean and the service improved."),
+    ("Avadi", "2026-11-11", "The bus is never slow."),
+    ("Central", "2026-11-11", "The road is dirty."),
+    ("Egmore", "2026-11-11", "The staff were helpful."),
+    ("Tambaram", "2026-11-12", "The bus was not bad."),
+    ("Guindy", "2026-11-12", "The air is bad because of smoke."),
+    ("Velachery", "2026-11-12", "The bus was fast but the platform is dirty."),
+    ("Avadi", "2026-11-12", "The service is not improved."),
+    ("Central", "2026-11-13", "The staff were good and helpful."),
+    ("Egmore", "2026-11-13", "The display is broken and the bus is slow."),
+]
+ 
+# Human reading of each complaint: P = positive, N = negative, U = neutral.
+# This list is deliberately separate from the algorithm so agreement can be measured.
+MANUAL_LABELS = [
+    "positive", "negative", "negative", "positive", "positive",
+    "negative", "positive", "negative", "negative", "positive",
+    "negative", "positive", "negative", "positive", "negative",
+    "positive", "negative", "positive", "negative", "negative",
+    "positive", "negative", "negative", "positive", "positive",
+    "negative", "positive", "negative", "positive", "negative",
+    "positive", "negative", "negative", "positive", "mixed",
+    "positive", "negative", "positive", "negative", "negative",
+    "positive", "positive", "negative", "positive", "positive",
+    "negative", "mixed", "positive", "positive", "negative",
+]
+ 
+STOP_WORDS = {
+    "the", "is", "are", "was", "were", "and", "a", "an", "of", "from",
+    "to", "in", "on", "at", "near", "with", "but", "because", "today",
+    "during", "there", "this", "it", "we", "us", "our", "has", "have",
+    "had", "coming", "makes", "were", "be", "been", "for"
+}
+ 
+ 
+def score(text):
+    """+1 per positive word, -1 per negative word; preceding negator flips it."""
+    words = re.findall(r"[a-z]+", text.lower())
+    total = 0
+    for i, word in enumerate(words):
+        value = 1 if word in POSITIVE else -1 if word in NEGATIVE else 0
+        if value and i > 0 and words[i - 1] in NEGATORS:
+            value *= -1
+        total += value
+    return total
+ 
+ 
+def label(text):
+    value = score(text)
+    return "positive" if value > 0 else "negative" if value < 0 else "neutral"
+ 
+ 
+def first_k_summary(text, k=2):
+    """Baseline: select the first k sentences in their original order."""
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    return " ".join(sentences[:k])
+ 
+ 
+def frequent_word_summary(text, k=2):
+    """Select k sentences with the highest frequency-weighted important words."""
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    words = re.findall(r"[a-z]+", text.lower())
+    useful = [w for w in words if w not in STOP_WORDS and len(w) > 2]
+    frequencies = Counter(useful)
+ 
+    def sentence_score(sentence):
+        terms = re.findall(r"[a-z]+", sentence.lower())
+        return sum(frequencies[w] for w in terms if w not in STOP_WORDS)
+ 
+    ranked = sorted(enumerate(sentences),
+                    key=lambda item: sentence_score(item[1]),
+                    reverse=True)
+    chosen = sorted(index for index, _ in ranked[:k])
+    return " ".join(sentences[i] for i in chosen)
+ 
+ 
+def evaluate_complaints():
+    print("\\nB4.1 - SENTIMENT RESULTS (50 COMPLAINTS)")
+    correct = 0
+    for i, (station, day, complaint) in enumerate(COMPLAINTS):
+        predicted = label(complaint)
+        expected = MANUAL_LABELS[i]
+        # Mixed cases are counted as disagreement because the simple model
+        # can output only positive, negative or neutral.
+        agree = predicted == expected
+        correct += int(agree)
+        print(f"{i + 1:02d}. {predicted:8s} | manual: {expected:8s} | "
+              f"{'AGREE' if agree else 'CHECK'} | {complaint}")
+    print(f"Agreement: {correct}/50 = {correct / 50 * 100:.1f}%")
+    return correct
+ 
+ 
+def demonstrate_summaries():
+    print("\\nALTERNATIVE SUMMARISER COMPARISON")
+    # Combine a station's complaints into one short report.
+    grouped = {}
+    for station, day, complaint in COMPLAINTS:
+        grouped.setdefault(station, []).append(complaint)
+ 
+    for station, items in grouped.items():
+        report = " ".join(items)
+        print(f"\\n{station}")
+        print("First-k summary: ", first_k_summary(report, 2))
+        print("Frequent-word summary:", frequent_word_summary(report, 2))
+ 
+ 
+def benchmark_database():
+    print("\\nB4.2 - SQLITE INDEX BENCHMARK")
+    connection = sqlite3.connect(":memory:")
+    cursor = connection.cursor()
+    cursor.execute("""
+        CREATE TABLE complaints (
+            id INTEGER PRIMARY KEY,
+            station TEXT NOT NULL,
+            day TEXT NOT NULL,
+            complaint TEXT NOT NULL
+        )
+    """)
+ 
+    # Create a larger test table to approximate the increased data volume.
+    rows = []
+    for i in range(50000):
+        station, day, complaint = COMPLAINTS[i % len(COMPLAINTS)]
+        rows.append((station, day, complaint))
+    cursor.executemany(
+        "INSERT INTO complaints(station, day, complaint) VALUES (?, ?, ?)",
+        rows
+    )
+    connection.commit()
+ 
+    query = "SELECT COUNT(*) FROM complaints WHERE station = ? AND day = ?"
+    parameters = ("Central", "2026-11-01")
+ 
+    def measure(repetitions=100):
+        start = time.perf_counter()
+        for _ in range(repetitions):
+            cursor.execute(query, parameters)
+            cursor.fetchone()
+        return (time.perf_counter() - start) / repetitions * 1000
+ 
+    before_ms = measure()
+    print(f"Average query time before index: {before_ms:.4f} ms")
+    cursor.execute("CREATE INDEX idx_station_day ON complaints(station, day)")
+    connection.commit()
+    after_ms = measure()
+    print(f"Average query time after index:  {after_ms:.4f} ms")
+ 
+    improvement = ((before_ms - after_ms) / before_ms * 100
+                   if before_ms else 0)
+    print(f"Measured time reduction: {improvement:.1f}%")
+    cursor.execute("EXPLAIN QUERY PLAN " + query, parameters)
+    print("Query plan after index:", cursor.fetchall())
+    connection.close()
+    return before_ms, after_ms
+ 
+ 
+def production_decision(agreement, before_ms, after_ms):
+    print("\\nB4.3 - PRODUCTION DECISION")
+    print("Storage: use a relational database such as PostgreSQL for structured")
+    print("station, date, complaint, predicted label and review-status fields.")
+    print("Cleaning: normalise case, remove unwanted punctuation, handle empty")
+    print("records, standardise station names and retain the original complaint.")
+    print("Analysis: run batch processing every 15 minutes; monitor accuracy,")
+    print("latency, neutral/mixed cases and changes in vocabulary.")
+    print("Index: keep a composite index on (station, day) for station/day filters.")
+    print(f"Measured database query: {before_ms:.4f} ms before and "
+          f"{after_ms:.4f} ms after indexing in this test.")
+    print(f"Manual-label agreement on this sample: {agreement}/50 "
+          f"({agreement / 50 * 100:.1f}%).")
+    if agreement >= 40:
+        print("Decision: the rule-based method may be used for a limited pilot,")
+        print("with human review for uncertain complaints and ongoing audits.")
+    else:
+        print("Decision: do not rely on the rule-based method for production.")
+        print("Collect labelled examples and train/evaluate a supervised model.")
+    print("At 50,000 complaints/month, use scheduled ingestion, validation,")
+    print("database indexes, backups, access control and monitoring.")
+    print("A trained model is recommended if accuracy, context and negation")
+    print("handling are important. The current dictionary misses sarcasm,")
+    print("mixed opinions, spelling errors and words outside its vocabulary.")
+ 
+ 
+def main():
+    agreement = evaluate_complaints()
+    demonstrate_summaries()
+    before_ms, after_ms = benchmark_database()
+    production_decision(agreement, before_ms, after_ms)
+ 
+ 
+if __name__ == "__main__":
+    main()
