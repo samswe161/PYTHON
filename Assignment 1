@@ -1,0 +1,181 @@
+SEASONAL_BASE_RATE = Decimal("32.00")
+FAT_STEP_VALUE = Decimal("0.45")
+ 
+# Explicit assumptions because the question does not state these values.
+FAT_STEP_SIZE = Decimal("0.10")
+REFERENCE_FAT = Decimal("0.00")
+ 
+BONUS_THRESHOLD_LITRES = Decimal("500.00")
+BONUS_PER_LITRE = Decimal("0.50")
+ 
+# Only the April-June card is provided in the assignment.
+APRIL_TO_JUNE_MONTHS = {4, 5, 6}
+ 
+ 
+def money(value):
+    """Round a monetary value to two decimal places."""
+    return Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+ 
+ 
+def read_decimal(value, field_name):
+    """Convert input to Decimal and reject invalid or negative readings."""
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"{field_name} must be a valid number")
+ 
+    if not number.is_finite() or number < 0:
+        raise ValueError(f"{field_name} must be a finite non-negative number")
+ 
+    return number
+ 
+ 
+def select_rate_card(month):
+    """
+    Return the rate card for the supplied month.
+    Other months are not guessed because their rates are absent from
+    the assignment statement.
+    """
+    if not isinstance(month, int) or not 1 <= month <= 12:
+        raise ValueError("Month must be an integer from 1 to 12")
+ 
+    if month in APRIL_TO_JUNE_MONTHS:
+        return {
+            "season": "April-June",
+            "base_rate": SEASONAL_BASE_RATE,
+            "fat_step_value": FAT_STEP_VALUE,
+            "fat_step_size": FAT_STEP_SIZE,
+            "reference_fat": REFERENCE_FAT,
+        }
+ 
+    raise ValueError(
+        "No rate card supplied for this month. Add the union-approved "
+        "rate card before calculating payment."
+    )
+ 
+ 
+def calculate_milk_rate(fat, snf, month):
+    """
+    Calculate the base milk rate using the selected seasonal rate card.
+ 
+    Assumption for this example:
+    Each complete 0.10 fat point above the reference fat earns Rs. 0.45.
+    SNF is checked and returned, but no SNF payment adjustment is applied
+    because the question gives no SNF rate or formula.
+    """
+    fat_value = read_decimal(fat, "Fat")
+    snf_value = read_decimal(snf, "SNF")
+    card = select_rate_card(month)
+ 
+    fat_difference = fat_value - card["reference_fat"]
+    if fat_difference < 0:
+        raise ValueError("Fat cannot be below the configured reference fat")
+ 
+    # Count complete fat steps; no partial step is paid.
+    complete_steps = int(fat_difference // card["fat_step_size"])
+ 
+    rate = (
+        card["base_rate"]
+        + Decimal(complete_steps) * card["fat_step_value"]
+    )
+ 
+    return {
+        "season": card["season"],
+        "fat": fat_value,
+        "snf": snf_value,
+        "fat_steps": complete_steps,
+        "base_rate": card["base_rate"],
+        "rate_per_litre": money(rate),
+    }
+ 
+ 
+def calculate_bonus(total_litres_in_ten_days):
+    """Award Rs. 0.50 for every litre only when total is strictly > 500."""
+    litres = read_decimal(total_litres_in_ten_days, "Ten-day litres")
+ 
+    if litres > BONUS_THRESHOLD_LITRES:
+        return money(litres * BONUS_PER_LITRE)
+ 
+    return Decimal("0.00")
+ 
+ 
+def calculate_payment(fat, snf, month, ten_day_litres):
+    """Return the rate, milk value, bonus and final payment."""
+    result = calculate_milk_rate(fat, snf, month)
+    litres = read_decimal(ten_day_litres, "Ten-day litres")
+ 
+    milk_value = money(result["rate_per_litre"] * litres)
+    bonus = calculate_bonus(litres)
+    total = money(milk_value + bonus)
+ 
+    result.update({
+        "litres": litres,
+        "milk_value": milk_value,
+        "bonus": bonus,
+        "total_payment": total,
+    })
+    return result
+ 
+ 
+def display_result(title, result):
+    print("\\n" + title)
+    print("-" * 55)
+    print("Season            :", result["season"])
+    print("Fat               :", result["fat"])
+    print("SNF               :", result["snf"])
+    print("Completed fat steps:", result["fat_steps"])
+    print("Rate per litre    : Rs.", result["rate_per_litre"])
+    print("Ten-day litres    :", result["litres"])
+    print("Milk value        : Rs.", result["milk_value"])
+    print("Bonus             : Rs.", result["bonus"])
+    print("Total payment     : Rs.", result["total_payment"])
+ 
+ 
+def run_tests():
+    print("TASK 12 - MILK RATE DESIGN TESTS")
+ 
+    # Test 1: April-June seasonal rate, 2-decimal analyser readings.
+    april = calculate_payment(
+        fat="4.20", snf="8.60", month=4, ten_day_litres="520.00"
+    )
+    display_result("TEST 1: APRIL, ABOVE BONUS THRESHOLD", april)
+ 
+    # Test 2: June seasonal rate, exactly 500 litres: no bonus.
+    june = calculate_payment(
+        fat="3.80", snf="8.50", month=6, ten_day_litres="500.00"
+    )
+    display_result("TEST 2: JUNE, EXACTLY 500 LITRES", june)
+ 
+    # Test 3: April seasonal rate, below threshold: no bonus.
+    below = calculate_payment(
+        fat="4.00", snf="8.55", month=4, ten_day_litres="450.00"
+    )
+    display_result("TEST 3: APRIL, BELOW BONUS THRESHOLD", below)
+ 
+    # Test 4: month outside April-June; no invented rate is used.
+    print("\\nTEST 4: OUTSIDE THE PROVIDED SEASON")
+    try:
+        calculate_payment(
+            fat="4.20", snf="8.60", month=10, ten_day_litres="520.00"
+        )
+    except ValueError as error:
+        print("Correctly handled:", error)
+ 
+    # Test 5: invalid analyser reading.
+    print("\\nTEST 5: INVALID FAT READING")
+    try:
+        calculate_payment(
+            fat="four", snf="8.60", month=4, ten_day_litres="520.00"
+        )
+    except ValueError as error:
+        print("Correctly handled:", error)
+ 
+    # Assertions verify the threshold and payment calculations.
+    assert april["bonus"] == Decimal("260.00")
+    assert june["bonus"] == Decimal("0.00")
+    assert below["bonus"] == Decimal("0.00")
+    print("\\nAll programmed validation checks passed.")
+ 
+ 
+if __name__ == "__main__":
+    run_tests()
